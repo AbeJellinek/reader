@@ -625,6 +625,7 @@ export class PaginatedFlow extends AbstractFlow {
 	};
 
 	private _handlePointerDown = (event: PointerEvent) => {
+		console.log('down', event); // TODO: Temp
 		if (this._touchStartID !== null
 				|| (event.pointerType !== 'touch' && event.pointerType !== 'pen')
 				|| (event.target as Element).closest('#annotation-overlay')) {
@@ -653,6 +654,7 @@ export class PaginatedFlow extends AbstractFlow {
 	};
 
 	private _handlePointerMove = (event: PointerEvent) => {
+		console.log('move', event, this._touchStartID); // TODO: Temp
 		if (this._touchStartID === null || event.pointerId !== this._touchStartID) {
 			return;
 		}
@@ -668,6 +670,7 @@ export class PaginatedFlow extends AbstractFlow {
 	};
 
 	private _handlePointerUp = (event: PointerEvent) => {
+		console.log('up', event, this._touchStartID); // TODO: Temp
 		if (this._touchStartID === null || event.pointerId !== this._touchStartID) {
 			return;
 		}
