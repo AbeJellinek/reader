@@ -203,6 +203,7 @@ class PDFView {
 		this._readAloudSentenceHighlightedPosition = null;
 		this._pointerDownTap = null;
 		this._pendingBackdropTap = null;
+		this._lastTouchTap = null;
 		this._suppressCompatibilityMouseUntil = 0;
 		this._nativeTextSelection = null;
 
@@ -1914,6 +1915,44 @@ class PDFView {
 		}
 	}
 
+	// Turns the current touch pointer action into word selection at the given position,
+	// if it's over text that isn't already selected and the touch isn't doing anything else
+	_startTouchWordSelection(position) {
+		if (this._mobile
+				|| !position
+				|| this._tool.type !== 'pointer'
+				|| this._pointerDownTap?.pointerType !== 'touch'
+				|| this.action?.type !== 'none'
+				|| this._selectionRanges.some(x => !x.collapsed && intersectAnnotationWithPoint(x.position, position))
+				|| this.getSelectableAnnotations(position)?.length) {
+			return false;
+		}
+		let selectionRanges = getWordSelectionRanges(this._pdfPages, position, position);
+		if (!selectionRanges.length || selectionRanges[0].collapsed) {
+			return false;
+		}
+		this.action = { type: 'selectText', mode: 'words', triggered: true };
+		this.pointerDownPosition = position;
+		// The selection popup is shown when the finger is lifted
+		this._selectionRanges = selectionRanges;
+		this._onSetSelectionPopup();
+		this._autoScroll.enable();
+		this._render();
+		return true;
+	}
+
+	// Whether a finger touching down is the second tap of a double tap, which selects
+	// words like a double click (and extends the selection when dragging)
+	_isTouchDoubleTap(event) {
+		return !this._mobile
+			&& event.pointerType === 'touch'
+			&& isDoubleTap(this._lastTouchTap, {
+				x: event.clientX,
+				y: event.clientY,
+				time: Date.now(),
+			});
+	}
+
 	_isDoubleTapCandidate(event) {
 		return this._options.platform === 'android'
 			&& event.pointerType === 'touch'
@@ -3374,6 +3413,13 @@ class PDFView {
 		}
 		let page = this.getPageByIndex(position.pageIndex);
 		let { action, selectAnnotations } = this.getActionAtPosition(position, event);
+		let touchDoubleTap = action.type === 'none'
+			&& this._tool.type === 'pointer'
+			&& this._isTouchDoubleTap(event);
+		this._lastTouchTap = null;
+		if (touchDoubleTap) {
+			action = { type: 'selectText' };
+		}
 
 		// if (action.type === 'overlay') {
 		// 	// TODO: Only link overlay should block text selection, while citation and reference shouldn't
@@ -3499,7 +3545,11 @@ class PDFView {
 		}
 
 		if (action.type === 'selectText') {
-			if (event.detail === 1 || !event.detail) {
+			if (touchDoubleTap) {
+				this._selectionRanges = getWordSelectionRanges(this._pdfPages, position, position);
+				this.action.mode = 'words';
+			}
+			else if (event.detail === 1 || !event.detail) {
 				if (shift && this._selectionRanges.length) {
 					this._selectionRanges = getModifiedSelectionRanges(this._pdfPages, this._selectionRanges, position);
 				}
@@ -4054,6 +4104,10 @@ class PDFView {
 
 	_handlePointerUp(event) {
 		let doubleTap = !!this._pointerDownTap?.doubleTap;
+		// A plain finger tap, which can start a double tap
+		let touchTap = event.pointerType === 'touch'
+			&& this._pointerDownTap?.pointerType === 'touch'
+			&& this.action?.type === 'none';
 		this._nativeTextSelection?.handlePointerUp();
 		if (this._nativeTextSelection?.shouldDeferEvent(event)) {
 			if (doubleTap) {
@@ -4282,6 +4336,7 @@ class PDFView {
 				this._resolveBackdropTap(event, pageTurnDirection);
 			}
 		}
+		this._lastTouchTap = touchTap ? { x: event.clientX, y: event.clientY, time: Date.now() } : null;
 		this._pointerDownTap = null;
 		// Update cursor after finishing the current action
 		if (position) {
@@ -4405,11 +4460,24 @@ class PDFView {
 		}
 
 		let position = this.pointerEventToPosition(event);
-		if (this._options.platform !== 'web' && event.button === 2) {
+		// A long press with a finger fires contextmenu with the main button. Over text it
+		// selects a word, which can then be extended by dragging; elsewhere (and over the
+		// selection or an annotation) it opens the context menu like a right click.
+		let touchHold = event.pointerType === 'touch' && event.button !== 2;
+		if (touchHold && this._startTouchWordSelection(position)) {
+			event.preventDefault();
+			return;
+		}
+		if (this._options.platform !== 'web' && (event.button === 2 || touchHold)) {
 			// Clear pointer down because the pointer up event won't be received in this iframe
 			// when opening a native context menu
 			this._pointerDownTriggered = false;
 			this._pointerDownTap = null;
+			// A long press started a pointer action (e.g. dragging the selection) that must not
+			// complete when the finger is lifted, which would act like a tap and deselect
+			if (touchHold) {
+				this._clearPointerAction();
+			}
 			let br = this._iframe.getBoundingClientRect();
 			let selectableAnnotation;
 			if (position) {
